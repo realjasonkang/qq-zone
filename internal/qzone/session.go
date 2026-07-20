@@ -22,40 +22,26 @@ import (
 	"time"
 )
 
-const (
-	OldSessionPath = "storage/session.json"
-	SessionsPath   = "storage/sessions.json"
+var (
+	// SessionPath 定义了多账号会话信息的持久化文件路径
+	SessionPath = "storage/sessions.json"
 )
 
+// Session 记录了单个账号登录状态的核心凭证与信息
 type Session struct {
-	QQ       string    `json:"qq"`
-	Nickname string    `json:"nickname"`
-	GTK      string    `json:"g_tk"`
-	Cookie   string    `json:"cookie"`
-	LastUsed time.Time `json:"last_used"`
+	QQ       string    `json:"qq"`        // 账号的唯一标识
+	Nickname string    `json:"nickname"`  // 账号的展示昵称
+	GTK      string    `json:"g_tk"`      // 根据 p_skey 算出的防跨站 CSRF 凭证
+	Cookie   string    `json:"cookie"`    // 请求 API 必须携带的持久化 Cookie 串
+	LastUsed time.Time `json:"last_used"` // 最后一次使用的时间
 }
 
-// LoadSessions loads all sessions from local storage
+// LoadSessions 从本地 session.json，返回当前存储的所有历史账号信息
 func LoadSessions() (map[string]*Session, error) {
 	sessions := make(map[string]*Session)
 
-	// 1. 尝试迁移旧的单账号 session.json
-	if _, err := os.Stat(OldSessionPath); err == nil {
-		data, err := os.ReadFile(OldSessionPath)
-		if err == nil {
-			var s Session
-			if err := json.Unmarshal(data, &s); err == nil {
-				s.LastUsed = time.Now()
-				sessions[s.QQ] = &s
-				// 迁移后保存到新路径并尝试删除旧文件
-				_ = saveSessionsToFile(sessions)
-				_ = os.Remove(OldSessionPath)
-			}
-		}
-	}
-
-	// 2. 加载多账号 sessions.json
-	data, err := os.ReadFile(SessionsPath)
+	// 尝试加载新的多账号 sessions.json
+	data, err := os.ReadFile(SessionPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return sessions, nil
@@ -70,7 +56,8 @@ func LoadSessions() (map[string]*Session, error) {
 	return sessions, nil
 }
 
-// SaveSession saves or updates a session
+// SaveSession 将当前最新提取到的登录凭证安全地写入到本地存储文件中
+// 支持自动合并已有会话，并刷新 LastUsed 时间戳
 func SaveSession(s *Session) error {
 	sessions, _ := LoadSessions()
 	if sessions == nil {
@@ -83,7 +70,7 @@ func SaveSession(s *Session) error {
 	return saveSessionsToFile(sessions)
 }
 
-// GetLastSession returns the most recently used session
+// GetLastSession 从本地存储中提取出最新使用（或最后更新）的活跃会话
 func GetLastSession() (*Session, error) {
 	sessions, err := LoadSessions()
 	if err != nil || len(sessions) == 0 {
@@ -102,7 +89,7 @@ func GetLastSession() (*Session, error) {
 	return list[0], nil
 }
 
-// RemoveSession removes a specific account's session
+// RemoveSession 根据提供的 QQ 号，从本地持久化存储中移除指定的登录状态
 func RemoveSession(qq string) error {
 	sessions, err := LoadSessions()
 	if err != nil {
@@ -126,14 +113,31 @@ func ClearSession() error {
 	return RemoveSession(s.QQ)
 }
 
-// HasSession checks if any session exists
+// SetActiveSession 标记指定的 QQ 号为当前激活状态(最新使用)
+func SetActiveSession(qq string) error {
+	sessions, err := LoadSessions()
+	if err != nil {
+		return err
+	}
+
+	if s, ok := sessions[qq]; ok {
+		s.LastUsed = time.Now()
+		return saveSessionsToFile(sessions)
+	}
+
+	return nil
+}
+
+// HasSession 检查本地是否存在任何已保存的历史登录凭证
 func HasSession() bool {
 	sessions, _ := LoadSessions()
 	return len(sessions) > 0
 }
 
+// saveSessionsToFile 将多账号状态全量写入本地文件
 func saveSessionsToFile(sessions map[string]*Session) error {
-	dir := filepath.Dir(SessionsPath)
+	// 确保目录存在
+	dir := filepath.Dir(SessionPath)
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		_ = os.MkdirAll(dir, os.ModePerm)
 	}
@@ -143,5 +147,5 @@ func saveSessionsToFile(sessions map[string]*Session) error {
 		return err
 	}
 
-	return os.WriteFile(SessionsPath, data, 0644)
+	return os.WriteFile(SessionPath, data, 0644)
 }
